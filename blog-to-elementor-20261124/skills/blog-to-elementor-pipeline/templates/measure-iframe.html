@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<!--
+  三端同源 iframe 实测页 · 用法
+  1. 把本文件放到目标 WordPress 站点根目录（例如 _wb_measure.html），与目标页同源。
+  2. Chrome headless 执行（用 >=600 的窗口，避免被钳到 504px）：
+     chrome --headless=new --disable-gpu --no-sandbox --no-first-run --no-proxy-server \
+            --user-data-dir=<临时目录> --virtual-time-budget=30000 --dump-dom \
+            "http://<站点>/_wb_measure.html?v=<随机数>" 2>/dev/null | grep -o 'RESULT_JSON=[^<]*'
+  3. 读 RESULT_JSON：每个视口的 overflowPx 必须为 0，字号/图片尺寸对照 responsive-recipe.md。
+  4. 用完必须从站点根目录删除本文件。
+
+  为什么用 iframe 而不是直接 --window-size=390 截目标页：
+  headless Chrome 会把 390 钳到 504px CSS 视口却按 390px 画布截图，制造假「文字被切断」。
+  iframe 宽度是真实 390px，测量结果可信。
+-->
+<html>
+<head><meta charset="utf-8"><title>PENDING</title></head>
+<body>
+<div id="out">PENDING</div>
+<script>
+var TARGET = '/?p=34';                // 改成要验的文章（文章用 ?p=，页面用 ?page_id=）
+var WIDTHS = [1440, 1024, 768, 390];  // 桌面 / 小桌面 / 平板 / 手机
+var results = [];
+
+function measure(w) {
+  return new Promise(function (resolve) {
+    var f = document.createElement('iframe');
+    f.style.width = w + 'px';
+    f.style.height = '900px';
+    f.style.border = '0';
+    f.src = TARGET + (TARGET.indexOf('?') > -1 ? '&' : '?') + 'm=' + Date.now() + '_' + w;
+    f.onload = function () {
+      setTimeout(function () {
+        try {
+          var d = f.contentDocument, win = f.contentWindow;
+          var cs = function (el) { return el ? win.getComputedStyle(el) : null; };
+          var h1 = d.querySelector('h1');
+          var ps = Array.prototype.slice.call(d.querySelectorAll('p'));
+          var imgs = Array.prototype.slice.call(d.querySelectorAll('img'));
+          var article = d.querySelector('article');
+          var main = d.querySelector('main');
+          // 遍历找真溢出（body 常有 overflow-x:clip，scrollWidth 对比会假阴性）
+          var overflowEls = [];
+          var all = d.querySelectorAll('*');
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i], r = el.getBoundingClientRect();
+            if ((el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 2) || r.right > d.documentElement.clientWidth + 2) {
+              overflowEls.push(el.tagName + '.' + String(el.className || '').slice(0, 40));
+            }
+          }
+          results.push({
+            viewport: w,
+            clientWidth: d.documentElement.clientWidth,
+            overflowPx: d.documentElement.scrollWidth - d.documentElement.clientWidth,
+            overflowEls: overflowEls.slice(0, 8),
+            mainPadding: cs(main) ? cs(main).paddingLeft : null,
+            articleWidth: article ? Math.round(article.getBoundingClientRect().width) : null,
+            articlePadInline: cs(article) ? cs(article).paddingLeft : null,
+            h1Font: cs(h1) ? cs(h1).fontSize : null,
+            h1Line: cs(h1) ? cs(h1).lineHeight : null,
+            h1PaddingLeft: cs(h1) ? cs(h1).paddingLeft : null,
+            bodyFont: ps.length > 2 ? cs(ps[2]).fontSize : null,
+            bodyLine: ps.length > 2 ? cs(ps[2]).lineHeight : null,
+            bodyPaddingLeft: ps.length > 2 ? cs(ps[2]).paddingLeft : null,
+            imageBoxes: imgs.slice(0, 3).map(function (im) {
+              var b = im.getBoundingClientRect();
+              return Math.round(b.width) + 'x' + Math.round(b.height);
+            })
+          });
+        } catch (e) {
+          results.push({ viewport: w, error: String(e) });
+        }
+        f.remove();
+        resolve();
+      }, 700);
+    };
+    document.body.appendChild(f);
+  });
+}
+
+(async function () {
+  for (var i = 0; i < WIDTHS.length; i++) { await measure(WIDTHS[i]); }
+  document.getElementById('out').textContent = 'RESULT_JSON=' + JSON.stringify(results);
+  document.title = 'DONE';
+})();
+</script>
+</body>
+</html>
